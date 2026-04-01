@@ -1,9 +1,14 @@
-import streamlit as st
+import json
+import os
+import random
+import time
+import urllib.error
+import urllib.request
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import random
-import time
+import streamlit as st
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -154,16 +159,311 @@ def init_state():
         "questions": [],
         "answers": [],
         "scores": [],
+        "feedback": [],
         "hints_used": [],
         "interview_type": None,
         "interview_done": False,
         "timer_start": None,
+        "mentor_reply": "",
+        "mentor_error": "",
+        "mentor_messages": [],
+        "mentor_context_key": "",
+        "skill_test_done": False,
+        "skill_test_result": {},
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 init_state()
+
+SKILL_AREAS = {
+    "hard_skills": [
+        "Python",
+        "Data Structures",
+        "DBMS",
+        "Operating Systems",
+        "System Design",
+        "Problem Solving",
+    ],
+    "soft_skills": [
+        "Communication",
+        "Confidence",
+        "Leadership",
+        "Teamwork",
+        "Adaptability",
+        "Time Management",
+    ],
+}
+
+PRACTICE_PLATFORMS = [
+    {
+        "name": "LeetCode",
+        "focus": "Interview-style DSA, company prep, topic practice",
+        "problemset_url": "https://leetcode.com/problemset/",
+        "tracks": [
+            ("Top Interview 150", "https://leetcode.com/studyplan/top-interview-150/"),
+            ("LeetCode 75", "https://leetcode.com/studyplan/leetcode-75/"),
+            ("Daily Challenge", "https://leetcode.com/problemset/all/"),
+        ],
+    },
+    {
+        "name": "HackerRank",
+        "focus": "Language practice, DSA, SQL, interview prep",
+        "problemset_url": "https://www.hackerrank.com/domains",
+        "tracks": [
+            ("Problem Solving", "https://www.hackerrank.com/domains/algorithms"),
+            ("SQL", "https://www.hackerrank.com/domains/sql"),
+            ("Interview Preparation Kit", "https://www.hackerrank.com/interview/interview-preparation-kit"),
+        ],
+    },
+    {
+        "name": "Codeforces",
+        "focus": "Competitive programming, rating-based problem solving",
+        "problemset_url": "https://codeforces.com/problemset?lang=en",
+        "tracks": [
+            ("Problemset", "https://codeforces.com/problemset?lang=en"),
+            ("Educational Rounds", "https://codeforces.com/edu/courses"),
+            ("Contests", "https://codeforces.com/contests"),
+        ],
+    },
+    {
+        "name": "CodeChef",
+        "focus": "Practice paths, contests, curated coding tracks",
+        "problemset_url": "https://www.codechef.com/practice",
+        "tracks": [
+            ("Practice", "https://www.codechef.com/practice"),
+            ("Learn", "https://www.codechef.com/learn"),
+            ("Contests", "https://www.codechef.com/contests"),
+        ],
+    },
+    {
+        "name": "GeeksforGeeks Practice",
+        "focus": "Topic-based interview problems, company-tagged questions",
+        "problemset_url": "https://www.geeksforgeeks.org/explore?page=1",
+        "tracks": [
+            ("All Practice", "https://www.geeksforgeeks.org/explore?page=1"),
+            ("Basic", "https://www.geeksforgeeks.org/explore?difficulty=Basic&page=1"),
+            ("Medium", "https://www.geeksforgeeks.org/explore?difficulty=Medium&page=1"),
+        ],
+    },
+]
+
+PROBLEM_ROADMAPS = {
+    "Beginner": [
+        "Arrays and strings basics",
+        "Hash maps and sets",
+        "Sorting and binary search basics",
+        "Stack and queue fundamentals",
+        "Easy SQL and basic Python practice",
+    ],
+    "Intermediate": [
+        "Two pointers and sliding window",
+        "Linked lists, trees, and graphs",
+        "Recursion, backtracking, and heaps",
+        "Dynamic programming basics",
+        "Medium SQL, OOP, and system basics",
+    ],
+    "Advanced": [
+        "Advanced DP and graph algorithms",
+        "Segment trees, tries, and union-find",
+        "System design and concurrency concepts",
+        "Hard interview problems by pattern",
+        "Company-tagged timed mock rounds",
+    ],
+}
+
+HARD_SKILL_TEST_QUESTIONS = [
+    {
+        "skill": "Python",
+        "question": "What is the output type of a list comprehension in Python?",
+        "options": ["tuple", "set", "list", "generator"],
+        "answer": "list",
+        "explanation": "A standard list comprehension creates a list object.",
+    },
+    {
+        "skill": "Python",
+        "question": "Which keyword is used to handle exceptions in Python?",
+        "options": ["catch", "except", "error", "handle"],
+        "answer": "except",
+        "explanation": "Python uses try/except blocks for exception handling.",
+    },
+    {
+        "skill": "Data Structures",
+        "question": "Which data structure is best suited for LIFO behavior?",
+        "options": ["Queue", "Stack", "Heap", "Tree"],
+        "answer": "Stack",
+        "explanation": "Stack follows Last In, First Out ordering.",
+    },
+    {
+        "skill": "Data Structures",
+        "question": "What is the average time complexity of hash table lookup?",
+        "options": ["O(1)", "O(log n)", "O(n)", "O(n log n)"],
+        "answer": "O(1)",
+        "explanation": "Average-case hash table lookup is constant time.",
+    },
+    {
+        "skill": "DBMS",
+        "question": "Which normal form removes transitive dependency?",
+        "options": ["1NF", "2NF", "3NF", "BCNF"],
+        "answer": "3NF",
+        "explanation": "3NF removes transitive dependency from non-key attributes.",
+    },
+    {
+        "skill": "DBMS",
+        "question": "Which SQL clause is used to filter aggregated results?",
+        "options": ["WHERE", "ORDER BY", "HAVING", "GROUP BY"],
+        "answer": "HAVING",
+        "explanation": "HAVING filters groups after aggregation.",
+    },
+    {
+        "skill": "Operating Systems",
+        "question": "Which condition is NOT one of the Coffman deadlock conditions?",
+        "options": ["Mutual exclusion", "Circular wait", "Preemption allowed", "Hold and wait"],
+        "answer": "Preemption allowed",
+        "explanation": "The deadlock condition is no preemption, not preemption allowed.",
+    },
+    {
+        "skill": "Operating Systems",
+        "question": "What does virtual memory primarily help with?",
+        "options": ["Networking", "Using disk as memory extension", "Compiling code", "Improving monitor refresh rate"],
+        "answer": "Using disk as memory extension",
+        "explanation": "Virtual memory extends usable memory through disk-backed paging.",
+    },
+    {
+        "skill": "System Design",
+        "question": "What is the main purpose of caching in system design?",
+        "options": ["Increase latency", "Reduce repeated expensive reads", "Encrypt data", "Balance salaries"],
+        "answer": "Reduce repeated expensive reads",
+        "explanation": "Caching improves performance by avoiding repeated expensive fetches.",
+    },
+    {
+        "skill": "System Design",
+        "question": "Which component typically distributes traffic across multiple servers?",
+        "options": ["Compiler", "Load balancer", "Debugger", "Container registry"],
+        "answer": "Load balancer",
+        "explanation": "A load balancer routes requests across multiple backend instances.",
+    },
+    {
+        "skill": "Problem Solving",
+        "question": "Which technique is commonly used for subarray problems with contiguous ranges?",
+        "options": ["Sliding window", "Heap sort", "Recursion tree", "Binary heap"],
+        "answer": "Sliding window",
+        "explanation": "Sliding window is a common pattern for contiguous range problems.",
+    },
+    {
+        "skill": "Problem Solving",
+        "question": "What is usually the first step before coding an algorithmic solution?",
+        "options": ["Deploy the app", "Memorize syntax", "Clarify the problem and constraints", "Write random test cases"],
+        "answer": "Clarify the problem and constraints",
+        "explanation": "Understanding the problem and constraints is the foundation of a good solution.",
+    },
+]
+
+DEBUG_TEST_BANK = [
+    {
+        "company": "TCS",
+        "title": "Loop Boundary Bug",
+        "skill": "Python",
+        "languages": ["Python", "Java", "C++"],
+        "prompt": "Fix the bug so the function correctly returns the sum of all numbers in the list.",
+        "buggy_code": """def total(nums):
+    s = 0
+    for i in range(len(nums) - 1):
+        s += nums[i]
+    return s""",
+        "correct_solution": """def total(nums):
+    s = 0
+    for i in range(len(nums)):
+        s += nums[i]
+    return s""",
+        "expected_keywords": ["range(len(nums))", "range(len(nums)-1)", "off by one", "last element"],
+        "fix_signals": ["len(nums)", "last", "off"],
+    },
+    {
+        "company": "Infosys",
+        "title": "Dictionary Frequency Fix",
+        "skill": "Python",
+        "languages": ["Python", "Java", "C++"],
+        "prompt": "Fix the code so it counts each character frequency correctly.",
+        "buggy_code": """def count_chars(text):
+    freq = {}
+    for ch in text:
+        freq[ch] = 1
+    return freq""",
+        "correct_solution": """def count_chars(text):
+    freq = {}
+    for ch in text:
+        freq[ch] = freq.get(ch, 0) + 1
+    return freq""",
+        "expected_keywords": ["freq[ch] = freq.get(ch, 0) + 1", "increment", "existing count"],
+        "fix_signals": ["get(", "+ 1", "increment"],
+    },
+    {
+        "company": "Wipro",
+        "title": "SQL Join Debug",
+        "skill": "DBMS",
+        "languages": ["SQL"],
+        "prompt": "The query should return all students even if they have no marks. Explain the fix.",
+        "buggy_code": """SELECT s.name, m.score
+FROM students s
+INNER JOIN marks m
+ON s.id = m.student_id;""",
+        "correct_solution": """SELECT s.name, m.score
+FROM students s
+LEFT JOIN marks m
+ON s.id = m.student_id;""",
+        "expected_keywords": ["LEFT JOIN", "all students", "inner join drops unmatched rows"],
+        "fix_signals": ["left join", "all students", "unmatched"],
+    },
+    {
+        "company": "Cognizant",
+        "title": "Stack Pop Safety",
+        "skill": "Data Structures",
+        "languages": ["Python", "Java", "C++"],
+        "prompt": "Fix the bug so popping from an empty stack does not crash the program.",
+        "buggy_code": """stack = []
+def pop_item():
+    return stack.pop()""",
+        "correct_solution": """stack = []
+def pop_item():
+    if stack:
+        return stack.pop()
+    return None""",
+        "expected_keywords": ["check if stack", "if stack", "empty", "guard condition"],
+        "fix_signals": ["if stack", "empty", "guard"],
+    },
+    {
+        "company": "Zoho Corporation",
+        "title": "Sorting Logic Bug",
+        "skill": "Problem Solving",
+        "languages": ["Python", "Java", "C++", "JavaScript"],
+        "prompt": "The function should sort numbers in ascending order. Explain the bug and fix.",
+        "buggy_code": """def sort_nums(nums):
+    return sorted(nums, reverse=True)""",
+        "correct_solution": """def sort_nums(nums):
+    return sorted(nums)""",
+        "expected_keywords": ["reverse=False", "remove reverse", "ascending"],
+        "fix_signals": ["ascending", "reverse", "false"],
+    },
+    {
+        "company": "Freshworks",
+        "title": "Cache Lookup Fallback",
+        "skill": "System Design",
+        "languages": ["Python", "Java", "JavaScript"],
+        "prompt": "Fix the logic so the app falls back to database fetch when cache miss happens.",
+        "buggy_code": """def get_user(cache, db, user_id):
+    user = cache.get(user_id)
+    return user.name""",
+        "correct_solution": """def get_user(cache, db, user_id):
+    user = cache.get(user_id)
+    if user is None:
+        user = db.get(user_id)
+    return user.name if user else None""",
+        "expected_keywords": ["if user is None", "cache miss", "fetch from db", "fallback"],
+        "fix_signals": ["none", "db", "cache miss", "fallback"],
+    },
+]
 
 # ─────────────────────────────────────────────
 # QUESTION BANK  (50+ questions)
@@ -254,16 +554,44 @@ QUESTION_BANK = {
 # COMPANIES DATA
 # ─────────────────────────────────────────────
 COMPANIES = [
-    {"name": "TCS", "location": "Chennai, Tamil Nadu", "domain": "IT Services / Consulting", "phone": "+91-44-67789999", "website": "www.tcs.com", "employees": "600,000+", "founded": 1968},
-    {"name": "Infosys", "location": "Chennai, Tamil Nadu", "domain": "IT Services / BPO", "phone": "+91-44-28524678", "website": "www.infosys.com", "employees": "350,000+", "founded": 1981},
-    {"name": "Wipro", "location": "Chennai, Tamil Nadu", "domain": "IT Services / Cloud", "phone": "+91-44-28524500", "website": "www.wipro.com", "employees": "250,000+", "founded": 1945},
-    {"name": "Cognizant", "location": "Chennai, Tamil Nadu", "domain": "IT Services / Digital", "phone": "+91-44-43281234", "website": "www.cognizant.com", "employees": "350,000+", "founded": 1994},
-    {"name": "HCL Technologies", "location": "Chennai, Tamil Nadu", "domain": "IT Services / Engineering", "phone": "+91-44-23456789", "website": "www.hcltech.com", "employees": "220,000+", "founded": 1976},
-    {"name": "Zoho Corporation", "location": "Chennai, Tamil Nadu", "domain": "SaaS / Product", "phone": "+91-44-67447000", "website": "www.zoho.com", "employees": "15,000+", "founded": 1996},
-    {"name": "Freshworks", "location": "Chennai, Tamil Nadu", "domain": "SaaS / CRM", "phone": "+91-44-61154500", "website": "www.freshworks.com", "employees": "5,000+", "founded": 2010},
-    {"name": "BHEL", "location": "Tiruchirappalli, Tamil Nadu", "domain": "Engineering / Manufacturing", "phone": "+91-431-2570100", "website": "www.bhel.com", "employees": "40,000+", "founded": 1952},
-    {"name": "L&T Technology Services", "location": "Chennai, Tamil Nadu", "domain": "Engineering / R&D Services", "phone": "+91-44-67777777", "website": "www.ltts.com", "employees": "23,000+", "founded": 1997},
-    {"name": "Hexaware Technologies", "location": "Chennai, Tamil Nadu", "domain": "IT Services / AI/ML", "phone": "+91-44-40521000", "website": "www.hexaware.com", "employees": "30,000+", "founded": 1990},
+    {"name": "TCS", "location": "Mumbai, Maharashtra", "state": "Maharashtra", "domain": "IT Services / Consulting", "website": "https://www.tcs.com/", "founded": 1968, "company_type": "Services", "tags": ["enterprise", "consulting", "ai", "cloud"]},
+    {"name": "Infosys", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "IT Services / Consulting", "website": "https://www.infosys.com/", "founded": 1981, "company_type": "Services", "tags": ["consulting", "digital", "cloud", "enterprise"]},
+    {"name": "Wipro", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "IT Services / Consulting", "website": "https://www.wipro.com/", "founded": 1945, "company_type": "Services", "tags": ["consulting", "ai", "cloud", "engineering"]},
+    {"name": "HCLTech", "location": "Noida, Uttar Pradesh", "state": "Uttar Pradesh", "domain": "IT Services / Engineering", "website": "https://www.hcltech.com/", "founded": 1976, "company_type": "Services", "tags": ["engineering", "cloud", "enterprise", "ai"]},
+    {"name": "Tech Mahindra", "location": "Pune, Maharashtra", "state": "Maharashtra", "domain": "IT Services / Telecom / Digital", "website": "https://www.techmahindra.com/", "founded": 1986, "company_type": "Services", "tags": ["telecom", "digital", "consulting"]},
+    {"name": "LTIMindtree", "location": "Mumbai, Maharashtra", "state": "Maharashtra", "domain": "IT Services / Digital Transformation", "website": "https://www.ltimindtree.com/", "founded": 1996, "company_type": "Services", "tags": ["enterprise", "cloud", "digital"]},
+    {"name": "Cognizant", "location": "Chennai, Tamil Nadu", "state": "Tamil Nadu", "domain": "IT Services / Digital Engineering", "website": "https://www.cognizant.com/", "founded": 1994, "company_type": "Services", "tags": ["digital", "engineering", "consulting"]},
+    {"name": "Accenture India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Consulting / Technology Services", "website": "https://www.accenture.com/in-en", "founded": 1989, "company_type": "Services", "tags": ["consulting", "strategy", "cloud", "ai"]},
+    {"name": "Capgemini India", "location": "Mumbai, Maharashtra", "state": "Maharashtra", "domain": "Consulting / Engineering / Cloud", "website": "https://www.capgemini.com/in-en/", "founded": 1967, "company_type": "Services", "tags": ["consulting", "cloud", "engineering"]},
+    {"name": "Deloitte India", "location": "Hyderabad, Telangana", "state": "Telangana", "domain": "Consulting / Risk / Technology", "website": "https://www2.deloitte.com/in/en.html", "founded": 1845, "company_type": "Services", "tags": ["consulting", "risk", "technology"]},
+    {"name": "IBM India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Cloud / AI / Enterprise Technology", "website": "https://www.ibm.com/in-en", "founded": 1911, "company_type": "Global Tech", "tags": ["ai", "cloud", "enterprise", "research"]},
+    {"name": "Oracle India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Cloud / Database / Enterprise Software", "website": "https://www.oracle.com/in/", "founded": 1977, "company_type": "Product", "tags": ["database", "cloud", "enterprise"]},
+    {"name": "Microsoft India", "location": "Hyderabad, Telangana", "state": "Telangana", "domain": "Cloud / AI / Productivity / Platforms", "website": "https://www.microsoft.com/en-in/", "founded": 1975, "company_type": "Product", "tags": ["cloud", "ai", "product", "platform"]},
+    {"name": "Google India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Search / Cloud / AI / Ads", "website": "https://about.google/intl/en_in/", "founded": 1998, "company_type": "Product", "tags": ["ai", "search", "cloud", "product"]},
+    {"name": "Amazon India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "E-commerce / Cloud / Product Engineering", "website": "https://www.amazon.in/", "founded": 1994, "company_type": "Product", "tags": ["cloud", "ecommerce", "product", "aws"]},
+    {"name": "Adobe India", "location": "Noida, Uttar Pradesh", "state": "Uttar Pradesh", "domain": "Creative Software / Document Cloud / Product", "website": "https://www.adobe.com/in/", "founded": 1982, "company_type": "Product", "tags": ["creative", "document", "product", "saas"]},
+    {"name": "SAP Labs India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Enterprise Software / Cloud", "website": "https://www.sap.com/india/index.html", "founded": 1972, "company_type": "Product", "tags": ["enterprise", "erp", "cloud", "product"]},
+    {"name": "Salesforce India", "location": "Hyderabad, Telangana", "state": "Telangana", "domain": "CRM / Cloud / SaaS", "website": "https://www.salesforce.com/in/", "founded": 1999, "company_type": "Product", "tags": ["crm", "saas", "cloud"]},
+    {"name": "ServiceNow India", "location": "Hyderabad, Telangana", "state": "Telangana", "domain": "Enterprise Workflow / SaaS", "website": "https://www.servicenow.com/", "founded": 2004, "company_type": "Product", "tags": ["saas", "enterprise", "workflow"]},
+    {"name": "Atlassian India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Developer Tools / SaaS / Collaboration", "website": "https://www.atlassian.com/", "founded": 2002, "company_type": "Product", "tags": ["developer tools", "saas", "collaboration"]},
+    {"name": "Intel India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Semiconductors / Systems / AI", "website": "https://www.intel.com/content/www/us/en/homepage.html", "founded": 1968, "company_type": "Hardware", "tags": ["chips", "semiconductor", "systems", "ai"]},
+    {"name": "NVIDIA India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "AI Computing / GPUs / Platforms", "website": "https://www.nvidia.com/en-in/", "founded": 1993, "company_type": "Hardware", "tags": ["ai", "gpu", "platform", "chips"]},
+    {"name": "Qualcomm India", "location": "Hyderabad, Telangana", "state": "Telangana", "domain": "Semiconductors / Telecom / Embedded Systems", "website": "https://www.qualcomm.com/", "founded": 1985, "company_type": "Hardware", "tags": ["chips", "telecom", "embedded"]},
+    {"name": "Cisco India", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Networking / Security / Cloud", "website": "https://www.cisco.com/site/in/en/index.html", "founded": 1984, "company_type": "Hardware", "tags": ["networking", "security", "cloud"]},
+    {"name": "Zoho Corporation", "location": "Chennai, Tamil Nadu", "state": "Tamil Nadu", "domain": "SaaS / Product", "website": "https://www.zoho.com/", "founded": 1996, "company_type": "Product", "tags": ["saas", "crm", "business software"]},
+    {"name": "Freshworks", "location": "Chennai, Tamil Nadu", "state": "Tamil Nadu", "domain": "SaaS / CRM / Support", "website": "https://www.freshworks.com/", "founded": 2010, "company_type": "Product", "tags": ["saas", "crm", "support"]},
+    {"name": "Flipkart", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "E-commerce / Product / Supply Chain", "website": "https://www.flipkart.com/", "founded": 2007, "company_type": "Startup", "tags": ["ecommerce", "product", "marketplace"]},
+    {"name": "PhonePe", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Fintech / Payments", "website": "https://www.phonepe.com/", "founded": 2015, "company_type": "Startup", "tags": ["fintech", "payments", "upi"]},
+    {"name": "Razorpay", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Fintech / Payments / Banking Tech", "website": "https://razorpay.com/", "founded": 2014, "company_type": "Startup", "tags": ["fintech", "payments", "banking"]},
+    {"name": "Paytm", "location": "Noida, Uttar Pradesh", "state": "Uttar Pradesh", "domain": "Fintech / Payments / Commerce", "website": "https://paytm.com/", "founded": 2010, "company_type": "Startup", "tags": ["fintech", "payments", "commerce"]},
+    {"name": "Swiggy", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Consumer Tech / Logistics / Commerce", "website": "https://www.swiggy.com/", "founded": 2014, "company_type": "Startup", "tags": ["consumer tech", "logistics", "commerce"]},
+    {"name": "Zomato", "location": "Gurugram, Haryana", "state": "Haryana", "domain": "Consumer Tech / Food Delivery", "website": "https://www.zomato.com/", "founded": 2008, "company_type": "Startup", "tags": ["consumer tech", "delivery", "food"]},
+    {"name": "Zerodha", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Fintech / Brokerage / Trading Platforms", "website": "https://zerodha.com/", "founded": 2010, "company_type": "Startup", "tags": ["fintech", "trading", "platform"]},
+    {"name": "Tata Elxsi", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Design / Embedded / Engineering R&D", "website": "https://www.tataelxsi.com/", "founded": 1989, "company_type": "Engineering", "tags": ["embedded", "design", "engineering"]},
+    {"name": "L&T Technology Services", "location": "Vadodara, Gujarat", "state": "Gujarat", "domain": "Engineering / R&D Services", "website": "https://www.ltts.com/", "founded": 1997, "company_type": "Engineering", "tags": ["engineering", "rd", "manufacturing"]},
+    {"name": "Mphasis", "location": "Bengaluru, Karnataka", "state": "Karnataka", "domain": "Cloud / Banking Tech / IT Services", "website": "https://www.mphasis.com/", "founded": 2000, "company_type": "Services", "tags": ["banking", "cloud", "services"]},
+    {"name": "Persistent Systems", "location": "Pune, Maharashtra", "state": "Maharashtra", "domain": "Software / Digital Engineering / Cloud", "website": "https://www.persistent.com/", "founded": 1990, "company_type": "Services", "tags": ["software", "cloud", "engineering"]},
+    {"name": "Hexaware", "location": "Mumbai, Maharashtra", "state": "Maharashtra", "domain": "IT Services / AI / Automation", "website": "https://hexaware.com/", "founded": 1990, "company_type": "Services", "tags": ["automation", "ai", "services"]},
 ]
 
 # ─────────────────────────────────────────────
@@ -347,6 +675,272 @@ def score_answer(answer, question_data):
 
     return score, " | ".join(feedback_parts)
 
+
+def load_groq_api_key():
+    env_key = os.getenv("GROQ_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    for file_name in os.listdir("."):
+        if file_name.startswith("gsk_") and file_name.endswith(".txt"):
+            with open(file_name, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+    return ""
+
+
+def groq_chat_completion(system_prompt, user_prompt, temperature=0.2, max_tokens=900):
+    api_key = load_groq_api_key()
+    if not api_key:
+        raise RuntimeError("Missing Groq API key. Set GROQ_API_KEY or keep the key in a local gsk_*.txt file.")
+
+    payload = {
+        "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "ai-interview-coach/1.0",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        if exc.code == 403 and "1010" in detail:
+            raise RuntimeError(
+                "Groq rejected this request with 403/1010. This usually means the API key is blocked, revoked, "
+                "restricted, or being denied by Groq's edge protection. Generate a fresh Groq API key, set it in "
+                "GROQ_API_KEY, and try again."
+            ) from exc
+        raise RuntimeError(f"Groq request failed with HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Unable to reach Groq API: {exc.reason}") from exc
+
+    return json.loads(data["choices"][0]["message"]["content"])
+
+
+def groq_text_chat(messages, temperature=0.7, max_tokens=900):
+    api_key = load_groq_api_key()
+    if not api_key:
+        raise RuntimeError("Missing Groq API key. Set GROQ_API_KEY or keep the key in a local gsk_*.txt file.")
+
+    payload = {
+        "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "ai-interview-coach/1.0",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        if exc.code == 403 and "1010" in detail:
+            raise RuntimeError(
+                "Groq rejected this request with 403/1010. This usually means the API key is blocked, revoked, "
+                "restricted, or being denied by Groq's edge protection. Generate a fresh Groq API key, set it in "
+                "GROQ_API_KEY, and try again."
+            ) from exc
+        raise RuntimeError(f"Groq request failed with HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Unable to reach Groq API: {exc.reason}") from exc
+
+    return data["choices"][0]["message"]["content"]
+
+
+def local_score_answer(answer, question_data):
+    if not answer or len(answer.strip()) < 10:
+        return {
+            "score": 1.0,
+            "summary": "Answer too short.",
+            "strengths": [],
+            "improvements": ["Add more detail and structure before submitting."],
+            "missed_keywords": question_data.get("keywords", []),
+            "ideal_answer": question_data.get("sample", ""),
+            "source": "rules",
+        }
+
+    answer_lower = answer.lower()
+    word_count = len(answer_lower.split())
+    keywords = question_data.get("keywords", [])
+    matched = sum(1 for kw in keywords if kw.lower() in answer_lower)
+    keyword_score = min(4.0, (matched / max(len(keywords), 1)) * 4.0)
+
+    if word_count < 20:
+        length_score = 0.5
+    elif word_count < 50:
+        length_score = 1.5
+    elif word_count <= 200:
+        length_score = 3.0
+    elif word_count <= 350:
+        length_score = 2.0
+    else:
+        length_score = 1.0
+
+    filler_count = sum(answer_lower.count(fw) for fw in FILLER_WORDS)
+    filler_score = max(0, 3.0 - filler_count * 0.5)
+    score = round(min(10.0, max(1.0, keyword_score + length_score + filler_score)), 1)
+
+    feedback_parts = []
+    if matched == 0:
+        feedback_parts.append("No key terms detected. Use more role-relevant vocabulary.")
+    elif matched < len(keywords) // 2:
+        feedback_parts.append(f"Only {matched}/{len(keywords)} key terms were covered.")
+    else:
+        feedback_parts.append(f"Good coverage of {matched}/{len(keywords)} key concepts.")
+
+    if word_count < 50:
+        feedback_parts.append("Answer is brief. Aim for 80 to 150 words.")
+    elif word_count > 300:
+        feedback_parts.append("Answer is long. Tighten the structure.")
+    else:
+        feedback_parts.append(f"Length is workable at {word_count} words.")
+
+    if filler_count > 3:
+        feedback_parts.append(f"High filler-word usage detected: {filler_count}.")
+    elif filler_count > 0:
+        feedback_parts.append(f"A few filler words showed up: {filler_count}.")
+    else:
+        feedback_parts.append("Delivery looks clean with no filler words detected.")
+
+    return {
+        "score": score,
+        "summary": " | ".join(feedback_parts),
+        "strengths": [
+            f"Covered {matched}/{len(keywords)} expected concepts." if keywords else "Stayed on topic.",
+            f"Response length: {word_count} words.",
+        ],
+        "improvements": [
+            "Add one specific example, metric, or result.",
+            "Use a clearer opening and closing sentence.",
+        ],
+        "missed_keywords": [kw for kw in keywords if kw.lower() not in answer_lower][:6],
+        "ideal_answer": question_data.get("sample", ""),
+        "source": "rules",
+    }
+
+
+def ai_score_answer(answer, question_data, interview_type):
+    system_prompt = (
+        "You are an expert interview evaluator. "
+        "Return strict JSON with keys: score, summary, strengths, improvements, missed_keywords, ideal_answer. "
+        "score must be a number from 1.0 to 10.0. "
+        "strengths and improvements must be arrays of 2 to 3 short strings. "
+        "ideal_answer must be a polished improved answer under 140 words."
+    )
+    user_prompt = json.dumps(
+        {
+            "interview_type": interview_type,
+            "question": question_data.get("q", ""),
+            "expected_keywords": question_data.get("keywords", []),
+            "sample_answer": question_data.get("sample", ""),
+            "tips": question_data.get("tips", ""),
+            "candidate_answer": answer,
+        },
+        ensure_ascii=True,
+    )
+    result = groq_chat_completion(system_prompt, user_prompt, temperature=0.2, max_tokens=700)
+    return {
+        "score": round(min(10.0, max(1.0, float(result.get("score", 1.0)))), 1),
+        "summary": str(result.get("summary", "AI review generated.")),
+        "strengths": [str(item) for item in result.get("strengths", [])][:3],
+        "improvements": [str(item) for item in result.get("improvements", [])][:3],
+        "missed_keywords": [str(item) for item in result.get("missed_keywords", [])][:6],
+        "ideal_answer": str(result.get("ideal_answer", question_data.get("sample", ""))),
+        "source": "ai",
+    }
+
+
+def score_answer(answer, question_data, interview_type):
+    fallback = local_score_answer(answer, question_data)
+    if not answer or len(answer.strip()) < 10:
+        return fallback
+
+    try:
+        return ai_score_answer(answer, question_data, interview_type)
+    except Exception as exc:
+        fallback["summary"] = f"{fallback['summary']} | AI review unavailable: {exc}"
+        return fallback
+
+
+def mentor_reply(question_data, user_prompt, topic, chat_history=None):
+    system_prompt = (
+        "You are an interview mentor that should feel like ChatGPT: conversational, adaptive, and helpful. "
+        "Answer naturally in plain markdown. You can explain, rewrite, quiz, roleplay, or critique answers. "
+        "Stay grounded in the selected interview question and topic when relevant, but answer follow-ups naturally. "
+        "Do not return JSON."
+    )
+    question_block = (
+        f"Topic: {topic}\n"
+        f"Current interview question: {question_data.get('q', '')}\n"
+        f"Helpful concepts: {', '.join(question_data.get('keywords', []))}\n"
+        f"Reference sample answer: {question_data.get('sample', '')}\n"
+        f"Interview tip: {question_data.get('tips', '')}"
+    )
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.append({"role": "system", "content": question_block})
+    for item in chat_history or []:
+        messages.append({"role": item["role"], "content": item["content"]})
+    messages.append({"role": "user", "content": user_prompt})
+    return groq_text_chat(messages, temperature=0.7, max_tokens=900)
+
+
+def local_mentor_reply(question_data, user_prompt, topic, chat_history=None):
+    keywords = question_data.get("keywords", [])[:5]
+    prior_turns = len(chat_history or [])
+    focus_line = ", ".join(keywords) if keywords else "clear structure and relevance"
+    answer = (
+        f"I am in fallback mode right now, but I can still coach you.\n\n"
+        f"We are discussing **{topic}** and this question: **{question_data.get('q', '')}**.\n\n"
+        f"The main ideas to cover are **{focus_line}**. "
+        f"A strong answer usually starts with the direct point, adds one concrete example, and ends with a short takeaway.\n\n"
+        f"Relevant tip: {question_data.get('tips', 'Keep the answer focused and specific.')}\n\n"
+        f"You have {prior_turns} earlier turns in this chat, so I am treating this as an ongoing conversation.\n\n"
+        f"For your latest message, my advice is: respond directly, stay specific, and if you want I can next do one of these:\n"
+        f"1. Rewrite your answer\n"
+        f"2. Ask you a follow-up interview question\n"
+        f"3. Give a stronger sample answer\n"
+        f"4. Critique your draft line by line"
+    )
+    if user_prompt.strip():
+        answer += f"\n\nYour message was: _{user_prompt.strip()}_"
+    return answer
+
+
+def get_mentor_response(question_data, user_prompt, topic, chat_history):
+    try:
+        result = mentor_reply(question_data, user_prompt, topic, chat_history)
+        return result, ""
+    except Exception as exc:
+        result = local_mentor_reply(question_data, user_prompt, topic, chat_history)
+        return result, f"Live AI unavailable, using built-in coach: {exc}"
+
 # ─────────────────────────────────────────────
 # GET QUESTIONS FOR INTERVIEW TYPE
 # ─────────────────────────────────────────────
@@ -372,6 +966,180 @@ def get_questions(interview_type, n):
     if len(selected) < n:
         selected += random.choices(pool, k=n-len(selected))
     return selected
+
+
+def average_skill_score(skill_dict):
+    if not skill_dict:
+        return 0.0
+    values = list(skill_dict.values())
+    return round(sum(values) / len(values), 1) if values else 0.0
+
+
+def build_growth_recommendations(user):
+    hard_skills = user.get("hard_skills", {})
+    soft_skills = user.get("soft_skills", {})
+    learning_style = user.get("learning_style", "Balanced")
+    weekly_hours = user.get("weekly_hours", 5)
+    target_role = user.get("target_role", "Software Engineer")
+    improvement_goal = user.get("improvement_goal", "Crack interviews with confidence")
+
+    hard_avg = average_skill_score(hard_skills)
+    soft_avg = average_skill_score(soft_skills)
+
+    weakest_hard = sorted(hard_skills.items(), key=lambda item: item[1])[:2]
+    weakest_soft = sorted(soft_skills.items(), key=lambda item: item[1])[:2]
+
+    strengths = []
+    if hard_skills:
+        strongest_hard = max(hard_skills.items(), key=lambda item: item[1])
+        strengths.append(f"Your strongest hard skill right now is {strongest_hard[0]} ({strongest_hard[1]}/10).")
+    if soft_skills:
+        strongest_soft = max(soft_skills.items(), key=lambda item: item[1])
+        strengths.append(f"Your strongest soft skill right now is {strongest_soft[0]} ({strongest_soft[1]}/10).")
+
+    recommendations = []
+    if weakest_hard:
+        recommendations.append(
+            f"Prioritize technical improvement in {weakest_hard[0][0]} and {weakest_hard[1][0] if len(weakest_hard) > 1 else weakest_hard[0][0]}."
+        )
+    if weakest_soft:
+        recommendations.append(
+            f"Work on {weakest_soft[0][0]} through mock interviews, reflection, and repeated practice."
+        )
+    if hard_avg < 6:
+        recommendations.append("Spend more time on fundamentals before attempting harder company-specific rounds.")
+    if soft_avg < 6:
+        recommendations.append("Practice speaking answers aloud so your delivery improves along with content.")
+
+    weekly_plan = [
+        f"Spend about {max(2, weekly_hours // 2)} hours per week on technical revision for your target role: {target_role}.",
+        f"Use a {learning_style.lower()} learning style plan: mix learning, practice, and review each week.",
+        "Complete at least 2 mock interview answers and review the feedback after each session.",
+        "Maintain one project or coding exercise log so your improvement is visible over time.",
+    ]
+
+    if weakest_hard:
+        weekly_plan.append(f"Start each week with one focused session on {weakest_hard[0][0]}.")
+    if weakest_soft:
+        weekly_plan.append(f"End each week by reviewing one soft-skill area: {weakest_soft[0][0]}.")
+
+    summary = (
+        f"You want to become a stronger {target_role} candidate and your current focus is '{improvement_goal}'. "
+        f"Your hard-skill average is {hard_avg}/10 and your soft-skill average is {soft_avg}/10."
+    )
+
+    return {
+        "summary": summary,
+        "strengths": strengths,
+        "recommendations": recommendations,
+        "weekly_plan": weekly_plan,
+        "hard_avg": hard_avg,
+        "soft_avg": soft_avg,
+    }
+
+
+def evaluate_hard_skill_test(responses):
+    per_skill = {}
+    for question, selected in responses:
+        skill = question["skill"]
+        stats = per_skill.setdefault(skill, {"correct": 0, "total": 0})
+        stats["total"] += 1
+        if selected == question["answer"]:
+            stats["correct"] += 1
+
+    scores = {}
+    for skill in SKILL_AREAS["hard_skills"]:
+        stats = per_skill.get(skill, {"correct": 0, "total": 0})
+        if stats["total"] == 0:
+            scores[skill] = 0
+        else:
+            scores[skill] = max(1, round((stats["correct"] / stats["total"]) * 10))
+
+    total_correct = sum(item["correct"] for item in per_skill.values())
+    total_questions = sum(item["total"] for item in per_skill.values())
+    overall = round((total_correct / total_questions) * 10, 1) if total_questions else 0.0
+    return {
+        "overall": overall,
+        "scores": scores,
+        "per_skill": per_skill,
+    }
+
+
+def get_recent_mentor_history(messages):
+    if not messages:
+        return []
+    usable = messages[:-1]
+    if len(usable) <= 10:
+        return [{"role": item["role"], "content": item["content"]} for item in usable]
+    return [{"role": item["role"], "content": item["content"]} for item in usable[-10:]]
+
+
+def evaluate_debug_submission(question, fixed_code, explanation, selected_language):
+    text = f"{fixed_code}\n{explanation}".lower()
+    matched = sum(1 for signal in question["fix_signals"] if signal.lower() in text)
+    is_correct = matched >= max(1, len(question["fix_signals"]) - 1)
+    score = 10.0 if is_correct else round(min(9.0, max(1.0, 2 + matched * 2.0)), 1)
+
+    syntax_notes = {
+        "Python": "Use indentation correctly and handle control flow with Python syntax like `if ...:` and `for ... in ...`.",
+        "Java": "Remember braces, semicolons, and explicit types in Java.",
+        "C++": "Remember braces, semicolons, and standard library usage in C++.",
+        "JavaScript": "Check block structure, `return` paths, and JavaScript function syntax.",
+        "SQL": "Use the correct SQL clause order and the right join/filter syntax.",
+    }
+
+    incorrect_points = []
+    for keyword in question["expected_keywords"][:2]:
+        if keyword.lower() not in text:
+            incorrect_points.append(keyword)
+
+    if is_correct:
+        feedback = (
+            f"Correct fix. You identified the core bug and used the right {selected_language} fix direction. "
+            "Nice work on debugging this one."
+        )
+    else:
+        feedback = "Your answer is not fully correct yet."
+        if incorrect_points:
+            feedback += f" Missing ideas: {', '.join(incorrect_points)}."
+        feedback += f" {syntax_notes.get(selected_language, 'Check the language syntax and control flow carefully.')}"
+
+    return {
+        "score": score,
+        "feedback": feedback,
+        "is_correct": is_correct,
+        "incorrect_points": incorrect_points,
+        "solution": question.get("correct_solution", ""),
+    }
+
+
+def filter_companies(companies, query="", state_filter="All", type_filter="All"):
+    query_tokens = [token.strip().lower() for token in query.split() if token.strip()]
+    filtered = []
+
+    for company in companies:
+        if state_filter != "All" and company.get("state", "") != state_filter:
+            continue
+        if type_filter != "All" and company.get("company_type", "") != type_filter:
+            continue
+
+        searchable_parts = [
+            company.get("name", ""),
+            company.get("location", ""),
+            company.get("state", ""),
+            company.get("domain", ""),
+            company.get("company_type", ""),
+            company.get("website", ""),
+            " ".join(company.get("tags", [])),
+        ]
+        searchable_text = " ".join(searchable_parts).lower()
+
+        if all(token in searchable_text for token in query_tokens):
+            match_score = sum(searchable_text.count(token) for token in query_tokens) if query_tokens else 0
+            filtered.append((match_score, company))
+
+    filtered.sort(key=lambda item: (-item[0], item[1]["name"]))
+    return [item[1] for item in filtered]
 
 # ─────────────────────────────────────────────
 # SIDEBAR NAVIGATION
@@ -401,7 +1169,10 @@ def sidebar():
         pages = [
             ("🏠", "Home"),
             ("📝", "Mock Interview"),
+            ("🧪", "Hard Skill Test"),
+            ("🐞", "Debug Coding Test"),
             ("📚", "Question Bank"),
+            ("🧩", "Practice Problems"),
             ("📊", "Progress Tracker"),
             ("🏆", "Leaderboard"),
             ("🤖", "AI Mentor"),
@@ -453,6 +1224,10 @@ def page_home():
                 branch = st.selectbox("Branch", ["CS", "IT", "ECE", "Mech", "Civil", "Other"])
                 year = st.selectbox("Year", ["1st", "2nd", "3rd", "4th", "Alumni"])
                 cgpa = st.number_input("CGPA", 0.0, 10.0, 7.5, 0.1)
+                coding_knowledge = st.selectbox(
+                    "Programming Knowledge",
+                    ["Beginner", "Intermediate", "Advanced", "Competitive Coding", "Full Stack", "AI/ML Focused"]
+                )
                 interests = st.multiselect("Areas of Interest",
                     ["Python", "Web Dev", "Data Science", "ML/AI", "DevOps", "Cloud", "DSA", "System Design", "Product Management"])
                 submitted = st.form_submit_button("🚀 Register & Start", use_container_width=True)
@@ -464,7 +1239,13 @@ def page_home():
                         st.session_state.user = {
                             "name": name, "email": email, "phone": phone,
                             "college": college, "branch": branch, "year": year,
-                            "cgpa": cgpa, "interests": interests,
+                            "cgpa": cgpa, "coding_knowledge": coding_knowledge, "interests": interests,
+                            "target_role": "Software Engineer",
+                            "learning_style": "Balanced",
+                            "weekly_hours": 6,
+                            "improvement_goal": "Crack interviews with confidence",
+                            "hard_skills": {skill: 5 for skill in SKILL_AREAS["hard_skills"]},
+                            "soft_skills": {skill: 5 for skill in SKILL_AREAS["soft_skills"]},
                         }
                         st.session_state.logged_in = True
                         st.session_state.page = "📝 Mock Interview"
@@ -478,6 +1259,7 @@ def page_home():
                 qname = st.text_input("Your Name")
                 qcollege = st.text_input("College")
                 qbranch = st.selectbox("Branch ", ["CS", "IT", "ECE", "Mech", "Civil"])
+                qcoding_knowledge = st.selectbox("Programming Knowledge ", ["Beginner", "Intermediate", "Advanced"])
                 qlogin = st.form_submit_button("▶ Quick Start", use_container_width=True)
                 if qlogin:
                     if not qname:
@@ -485,7 +1267,14 @@ def page_home():
                     else:
                         st.session_state.user = {
                             "name": qname, "college": qcollege, "branch": qbranch,
-                            "email": "", "phone": "", "year": "3rd", "cgpa": 7.5, "interests": []
+                            "email": "", "phone": "", "year": "3rd", "cgpa": 7.5,
+                            "coding_knowledge": qcoding_knowledge, "interests": [],
+                            "target_role": "Software Engineer",
+                            "learning_style": "Balanced",
+                            "weekly_hours": 6,
+                            "improvement_goal": "Crack interviews with confidence",
+                            "hard_skills": {skill: 5 for skill in SKILL_AREAS["hard_skills"]},
+                            "soft_skills": {skill: 5 for skill in SKILL_AREAS["soft_skills"]},
                         }
                         st.session_state.logged_in = True
                         st.session_state.page = "📝 Mock Interview"
@@ -525,7 +1314,7 @@ def page_home():
             st.metric("CGPA", user.get("cgpa", "N/A"))
 
         st.markdown("### 🚀 Quick Actions")
-        qa1, qa2, qa3 = st.columns(3)
+        qa1, qa2, qa3, qa4 = st.columns(4)
         with qa1:
             if st.button("🎤 Start Mock Interview", use_container_width=True):
                 st.session_state.page = "📝 Mock Interview"
@@ -537,6 +1326,10 @@ def page_home():
         with qa3:
             if st.button("📊 View Progress", use_container_width=True):
                 st.session_state.page = "📊 Progress Tracker"
+                st.rerun()
+        with qa4:
+            if st.button("🤖 AI Mentor", use_container_width=True):
+                st.session_state.page = "🤖 AI Mentor"
                 st.rerun()
 
 # ─────────────────────────────────────────────
@@ -570,6 +1363,7 @@ def page_interview():
             st.session_state.questions = qs
             st.session_state.answers = [""] * len(qs)
             st.session_state.scores = [0.0] * len(qs)
+            st.session_state.feedback = [{} for _ in qs]
             st.session_state.hints_used = [False] * len(qs)
             st.session_state.q_index = 0
             st.session_state.interview_active = True
@@ -628,9 +1422,11 @@ def run_interview():
 
     with c1:
         if st.button("✅ Submit Answer", key=f"sub_{idx}", use_container_width=True):
-            score, feedback = score_answer(answer, q_data)
+            with st.spinner("Reviewing your answer with AI..."):
+                feedback = score_answer(answer, q_data, st.session_state.interview_type)
             st.session_state.answers[idx] = answer
-            st.session_state.scores[idx] = score
+            st.session_state.scores[idx] = feedback["score"]
+            st.session_state.feedback[idx] = feedback
             st.session_state.q_index = idx + 1
             st.session_state.timer_start = time.time()
             if idx + 1 >= total:
@@ -647,6 +1443,15 @@ def run_interview():
         if st.button("⏭ Skip", key=f"skip_{idx}", use_container_width=True):
             st.session_state.answers[idx] = ""
             st.session_state.scores[idx] = 1.0
+            st.session_state.feedback[idx] = {
+                "score": 1.0,
+                "summary": "Question skipped.",
+                "strengths": [],
+                "improvements": ["Attempt the question next time, even with a short structured answer."],
+                "missed_keywords": q_data.get("keywords", []),
+                "ideal_answer": q_data.get("sample", ""),
+                "source": "rules",
+            }
             st.session_state.q_index = idx + 1
             st.session_state.timer_start = time.time()
             if idx + 1 >= total:
@@ -658,6 +1463,17 @@ def run_interview():
     if remaining == 0:
         st.warning("⏰ Time's up! Auto-advancing to next question.")
         time.sleep(1)
+        st.session_state.answers[idx] = answer
+        st.session_state.scores[idx] = 1.0
+        st.session_state.feedback[idx] = {
+            "score": 1.0,
+            "summary": "Time ran out before submission.",
+            "strengths": [],
+            "improvements": ["Practice answering within 60 seconds using a simple structure."],
+            "missed_keywords": q_data.get("keywords", []),
+            "ideal_answer": q_data.get("sample", ""),
+            "source": "rules",
+        }
         st.session_state.q_index = idx + 1
         st.session_state.timer_start = time.time()
         if idx + 1 >= len(qs):
@@ -683,6 +1499,7 @@ def show_interview_results():
     qs = st.session_state.questions
     scores = st.session_state.scores
     answers = st.session_state.answers
+    feedback_items = st.session_state.feedback
 
     avg = round(sum(scores)/len(scores), 1) if scores else 0
     st.markdown(f"## 🎉 Interview Complete!")
@@ -713,15 +1530,24 @@ def show_interview_results():
 
     # Detailed feedback
     st.markdown("### 📋 Detailed Feedback")
-    for i, (q_data, answer, score) in enumerate(zip(qs, answers, scores)):
+    for i, (q_data, answer, score, feedback) in enumerate(zip(qs, answers, scores, feedback_items)):
         with st.expander(f"Q{i+1}: {q_data['q']} — Score: {score}/10"):
             if answer:
                 st.markdown(f"**Your Answer:** {answer}")
-                _, feedback = score_answer(answer, q_data)
-                st.info(feedback)
+                st.info(feedback.get("summary", "No feedback available."))
+                if feedback.get("strengths"):
+                    st.markdown("**What worked**")
+                    for item in feedback["strengths"]:
+                        st.markdown(f"- {item}")
+                if feedback.get("improvements"):
+                    st.markdown("**What to improve**")
+                    for item in feedback["improvements"]:
+                        st.markdown(f"- {item}")
+                if feedback.get("missed_keywords"):
+                    st.markdown(f"**Missing concepts:** {', '.join(feedback['missed_keywords'])}")
             else:
                 st.warning("Question was skipped.")
-            st.success(f"**Sample Answer:** {q_data['sample']}")
+            st.success(f"**AI Improved Answer:** {feedback.get('ideal_answer', q_data['sample'])}")
             st.caption(f"💡 **Tip:** {q_data['tips']}")
 
     col1, col2 = st.columns(2)
@@ -730,6 +1556,7 @@ def show_interview_results():
             st.session_state.interview_done = False
             st.session_state.interview_active = False
             st.session_state.questions = []
+            st.session_state.feedback = []
             st.rerun()
     with col2:
         if st.button("📊 View Progress", use_container_width=True):
@@ -763,6 +1590,193 @@ def page_question_bank():
                 st.markdown("---")
                 st.success(f"**✅ Sample Answer:** {q_data['sample']}")
                 st.info(f"**💡 Tips:** {q_data['tips']}")
+
+
+def page_hard_skill_test():
+    st.markdown("<div class='main-header'><h1>🧪 Hard Skill Test</h1><p>Take a technical assessment and evaluate your hard skills through performance</p></div>", unsafe_allow_html=True)
+
+    if not st.session_state.logged_in:
+        st.warning("Please login first.")
+        return
+
+    user = st.session_state.user
+    user.setdefault("hard_skills", {skill: 5 for skill in SKILL_AREAS["hard_skills"]})
+
+    if st.session_state.skill_test_done and st.session_state.skill_test_result:
+        result = st.session_state.skill_test_result
+        st.success(f"Overall hard-skill score: **{result['overall']}/10**")
+
+        metric_cols = st.columns(3)
+        for idx, skill in enumerate(SKILL_AREAS["hard_skills"]):
+            with metric_cols[idx % 3]:
+                st.metric(skill, f"{result['scores'].get(skill, 0)}/10")
+
+        st.markdown("#### Breakdown")
+        for skill in SKILL_AREAS["hard_skills"]:
+            stats = result["per_skill"].get(skill, {"correct": 0, "total": 0})
+            st.markdown(f"- {skill}: {stats['correct']} correct out of {stats['total']}")
+
+        weakest = sorted(result["scores"].items(), key=lambda item: item[1])[:2]
+        st.markdown("#### Improvement Focus")
+        for skill, score in weakest:
+            st.markdown(f"- Improve {skill} next. Current evaluated score: {score}/10")
+
+        if st.button("Retake Test", use_container_width=True):
+            st.session_state.skill_test_done = False
+            st.session_state.skill_test_result = {}
+            st.rerun()
+        return
+
+    st.info("This test will score core technical areas and update your hard-skill profile from your answers.")
+    with st.form("hard_skill_test_form"):
+        responses = []
+        for idx, question in enumerate(HARD_SKILL_TEST_QUESTIONS):
+            st.markdown(f"**Q{idx+1}. [{question['skill']}] {question['question']}**")
+            selected = st.radio(
+                f"Choose answer {idx+1}",
+                question["options"],
+                key=f"hard_skill_test_{idx}",
+                label_visibility="collapsed",
+            )
+            responses.append((question, selected))
+
+        submitted = st.form_submit_button("Submit Test", use_container_width=True)
+        if submitted:
+            result = evaluate_hard_skill_test(responses)
+            user["hard_skills"] = result["scores"]
+            st.session_state.user = user
+            st.session_state.skill_test_result = result
+            st.session_state.skill_test_done = True
+            st.success("Your hard-skill profile has been updated from test performance.")
+            st.rerun()
+
+
+def page_debug_coding_test():
+    st.markdown("<div class='main-header'><h1>🐞 Debug Coding Test</h1><p>Solve company-style debugging questions and review your company-wise dashboard</p></div>", unsafe_allow_html=True)
+
+    if not st.session_state.logged_in:
+        st.warning("Please login first.")
+        return
+
+    user = st.session_state.user
+    history = user.get("debug_test_history", [])
+
+    company_options = sorted({item["company"] for item in DEBUG_TEST_BANK})
+    selected_company = st.selectbox("Select Company Style", company_options)
+    question_pool = [item for item in DEBUG_TEST_BANK if item["company"] == selected_company]
+    selected_title = st.selectbox("Select Debug Question", [item["title"] for item in question_pool])
+    question = next(item for item in question_pool if item["title"] == selected_title)
+    selected_language = st.selectbox("Coding Language To Debug", question.get("languages", ["Python"]))
+
+    top1, top2 = st.columns([3, 2])
+    with top1:
+        st.markdown(f"### {question['title']}")
+        st.caption(f"Company style: {question['company']} | Skill focus: {question['skill']}")
+        st.write(question["prompt"])
+        language_map = {
+            "Python": "python",
+            "Java": "java",
+            "C++": "cpp",
+            "JavaScript": "javascript",
+            "SQL": "sql",
+        }
+        st.code(question["buggy_code"], language=language_map.get(selected_language, "python"))
+
+    with top2:
+        st.markdown("### Dashboard")
+        company_history = [item for item in history if item["company"] == selected_company]
+        avg_score = round(sum(item["score"] for item in company_history) / len(company_history), 1) if company_history else 0
+        lang_history = [item for item in history if item.get("language") == selected_language]
+        st.metric("Attempts", len(company_history))
+        st.metric("Avg Score", avg_score)
+        st.metric("Language Attempts", len(lang_history))
+        st.markdown(f"**Supported languages:** {', '.join(question.get('languages', ['Python']))}")
+
+    with st.form("debug_test_form"):
+        fixed_code = st.text_area("Paste your fixed code", height=220, placeholder="Write the corrected code here...")
+        explanation = st.text_area("Explain the bug and your fix", height=140, placeholder="Explain what was wrong and how you fixed it...")
+        submitted = st.form_submit_button("Evaluate Debug Solution", use_container_width=True)
+
+        if submitted:
+            result = evaluate_debug_submission(question, fixed_code, explanation, selected_language)
+            attempt = {
+                "company": question["company"],
+                "title": question["title"],
+                "skill": question["skill"],
+                "language": selected_language,
+                "score": result["score"],
+                "feedback": result["feedback"],
+                "is_correct": result["is_correct"],
+                "solution": result["solution"],
+                "date": time.strftime("%Y-%m-%d"),
+            }
+            history.append(attempt)
+            user["debug_test_history"] = history
+            st.session_state.user = user
+            if result["is_correct"]:
+                st.success(f"Correct debug solution. Congrats! Your evaluated score is {result['score']}/10.")
+                st.info(result["feedback"])
+            else:
+                st.error(f"Not fully correct yet. Your evaluated score is {result['score']}/10.")
+                st.info(result["feedback"])
+                if result["incorrect_points"]:
+                    st.markdown("**What is incorrect**")
+                    for item in result["incorrect_points"]:
+                        st.markdown(f"- You missed or did not clearly apply: `{item}`")
+                st.markdown("**Correct solution**")
+                st.code(result["solution"], language=language_map.get(selected_language, "python"))
+
+    if history:
+        st.markdown("#### Company-wise Performance")
+        company_scores = {}
+        for item in history:
+            company_scores.setdefault(item["company"], []).append(item["score"])
+        for company, scores in company_scores.items():
+            st.markdown(f"- {company}: {round(sum(scores)/len(scores), 1)}/10 average across {len(scores)} attempt(s)")
+
+        st.markdown("#### Recent Debug Attempts")
+        recent = list(reversed(history[-5:]))
+        for item in recent:
+            with st.expander(f"{item['date']} — {item['company']} — {item['title']} ({item['score']}/10)"):
+                st.markdown(f"**Skill:** {item['skill']}")
+                st.markdown(f"**Language:** {item.get('language', 'Not specified')}")
+                st.write(item["feedback"])
+                if not item.get("is_correct") and item.get("solution"):
+                    st.code(item["solution"], language=language_map.get(item.get("language", "Python"), "python"))
+
+
+def page_practice_problems():
+    st.markdown("<div class='main-header'><h1>🧩 Practice Problems</h1><p>LeetCode and other technical problem platforms in one place</p></div>", unsafe_allow_html=True)
+
+    user = st.session_state.user if st.session_state.logged_in else {}
+    coding_level = user.get("coding_knowledge", "Intermediate")
+    roadmap_key = "Intermediate"
+    if "Beginner" in coding_level:
+        roadmap_key = "Beginner"
+    elif "Advanced" in coding_level or "Competitive" in coding_level:
+        roadmap_key = "Advanced"
+
+    st.info(
+        f"Based on your programming knowledge level of **{coding_level}**, start with the **{roadmap_key}** roadmap."
+    )
+
+    st.markdown("#### Recommended Roadmap")
+    for item in PROBLEM_ROADMAPS[roadmap_key]:
+        st.markdown(f"- {item}")
+
+    st.markdown("#### Major Problem Platforms")
+    for platform in PRACTICE_PLATFORMS:
+        with st.expander(f"{platform['name']} — {platform['focus']}"):
+            st.markdown(f"**Main problem set:** {platform['problemset_url']}")
+            st.markdown("**Useful tracks:**")
+            for title, url in platform["tracks"]:
+                st.markdown(f"- [{title}]({url})")
+
+    st.markdown("#### Suggested Use")
+    st.markdown("- Pick one main platform instead of trying everything at once.")
+    st.markdown("- Use easy to medium progression before hard problems.")
+    st.markdown("- Track patterns you miss, not just scores.")
+    st.markdown("- Mix coding problems with CS fundamentals and interview explanation practice.")
 
 # ─────────────────────────────────────────────
 # PAGE: PROGRESS TRACKER
@@ -964,19 +1978,86 @@ def page_mentor():
         }
         st.info(f"**{topic} Strategy:** {category_tips.get(topic, 'Practice consistently and review sample answers.')}")
 
+        st.markdown("### Ask The AI Mentor")
+        context_key = f"{topic}::{selected_q_label}"
+        if st.session_state.mentor_context_key != context_key:
+            st.session_state.mentor_context_key = context_key
+            st.session_state.mentor_messages = [
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"I am your interview mentor for **{topic}**.\n\n"
+                        f"We are focused on **{q_data['q']}**. You can talk to me normally, like ChatGPT. "
+                        f"Ask for rewrites, mock interviews, better examples, follow-up questions, or feedback on your draft."
+                    ),
+                }
+            ]
+            st.session_state.mentor_error = ""
+
+        if st.session_state.mentor_error:
+            st.warning(st.session_state.mentor_error)
+
+        for message in st.session_state.mentor_messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        mentor_prompt = st.chat_input("Message your mentor...")
+        if mentor_prompt:
+            st.session_state.mentor_messages.append({"role": "user", "content": mentor_prompt})
+
+            history_for_model = get_recent_mentor_history(st.session_state.mentor_messages)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking like an interview coach..."):
+                    result, error_message = get_mentor_response(q_data, mentor_prompt, topic, history_for_model)
+                st.markdown(result)
+
+            st.session_state.mentor_messages.append(
+                {
+                    "role": "assistant",
+                    "content": result,
+                }
+            )
+            st.session_state.mentor_error = error_message
+            st.rerun()
+
 # ─────────────────────────────────────────────
 # PAGE: TOP COMPANIES
 # ─────────────────────────────────────────────
 def page_companies():
-    st.markdown("<div class='main-header'><h1>🏢 Top Companies in Tamil Nadu</h1><p>Explore leading employers and their details</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='main-header'><h1>🏢 Top Companies in India</h1><p>Explore major employers across India with smarter search and filters</p></div>", unsafe_allow_html=True)
 
-    search = st.text_input("🔍 Search by name, location, or domain", "")
-    filtered = [c for c in COMPANIES if
-                search.lower() in c["name"].lower() or
-                search.lower() in c["location"].lower() or
-                search.lower() in c["domain"].lower()] if search else COMPANIES
+    states = ["All"] + sorted({company["state"] for company in COMPANIES})
+    company_types = ["All"] + sorted({company["company_type"] for company in COMPANIES})
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        search = st.text_input("🔍 Search by company, city, state, domain, tags, or website", "")
+    with c2:
+        state_filter = st.selectbox("State", states)
+    with c3:
+        type_filter = st.selectbox("Company Type", company_types)
+
+    filtered = filter_companies(COMPANIES, search, state_filter, type_filter)
 
     st.caption(f"Showing {len(filtered)} of {len(COMPANIES)} companies")
+
+    company_tips = {
+        "TCS": "NQT test + Technical + HR. Focus on aptitude, C or Java basics, and communication.",
+        "Infosys": "InfyTQ style prep, logical reasoning, verbal ability, and coding basics are useful.",
+        "Wipro": "Practice data structures, aptitude, and campus-style technical rounds.",
+        "Cognizant": "Expect coding + aptitude + HR for GenC style roles.",
+        "HCLTech": "Focus on strong fundamentals, communication, and practical technical questions.",
+        "Zoho Corporation": "Very coding and debugging heavy. Written rounds can be tough and merit based.",
+        "Freshworks": "Coding, design thinking, and product mindset matter.",
+        "L&T Technology Services": "Aptitude, engineering basics, and domain fundamentals matter.",
+        "Hexaware": "Automation, AI awareness, and practical technical interviews are useful.",
+        "Microsoft India": "Strong DSA, coding rounds, and system thinking are expected.",
+        "Google India": "Prepare deeply for algorithms, data structures, and problem solving.",
+        "Amazon India": "DSA plus leadership-principle style behavioral prep helps a lot.",
+        "Flipkart": "Backend fundamentals, scale thinking, and DSA are valuable.",
+        "PhonePe": "Payments systems, APIs, and backend fundamentals are important.",
+        "Razorpay": "Expect fintech backend scenarios, debugging, and API-focused thinking.",
+    }
 
     for c in filtered:
         with st.expander(f"🏢 {c['name']} — {c['domain']}"):
@@ -985,26 +2066,15 @@ def page_companies():
                 st.markdown(f"📍 **Location:** {c['location']}")
                 st.markdown(f"🏭 **Domain:** {c['domain']}")
             with col2:
-                st.markdown(f"📞 **Phone:** {c['phone']}")
+                st.markdown(f"🗺 **State:** {c.get('state', '—')}")
                 st.markdown(f"🌐 **Website:** {c['website']}")
             with col3:
-                st.markdown(f"👥 **Employees:** {c['employees']}")
+                st.markdown(f"🧭 **Type:** {c.get('company_type', '—')}")
                 st.markdown(f"📅 **Founded:** {c['founded']}")
+            if c.get("tags"):
+                st.caption(f"Tags: {', '.join(c['tags'])}")
 
-            # Interview tips per company
-            company_tips = {
-                "TCS": "NQT test + Technical + HR. Focus on aptitude, C/Java basics, and communication.",
-                "Infosys": "InfyTQ platform test + HR. Strong focus on logical reasoning and verbal ability.",
-                "Wipro": "NLTH test + Technical + HR. Practice data structures and aptitude.",
-                "Cognizant": "GenC / GenC Next programs. Coding + aptitude + HR.",
-                "HCL Technologies": "Online test + group discussion + interview. Focus on tech fundamentals.",
-                "Zoho Corporation": "No-agent direct hiring. Multi-round written tests + technical interviews. Very merit-based.",
-                "Freshworks": "Coding round + System design + Culture fit. Startup mindset valued.",
-                "BHEL": "GATE score for engineers + departmental interviews. Technical depth required.",
-                "L&T Technology Services": "Aptitude + Technical + HR. Focus on engineering fundamentals.",
-                "Hexaware Technologies": "Online test + technical interview. AI/ML skills are a plus.",
-            }
-            st.info(f"🎯 **Interview Tip:** {company_tips.get(c['name'], 'Research the company and prepare for technical + HR rounds.')}")
+            st.info(f"🎯 **Interview Tip:** {company_tips.get(c['name'], 'Research the company, role, and interview format before applying.')}")
 
 # ─────────────────────────────────────────────
 # PAGE: MY PROFILE
@@ -1017,6 +2087,12 @@ def page_profile():
         return
 
     user = st.session_state.user
+    user.setdefault("target_role", "Software Engineer")
+    user.setdefault("learning_style", "Balanced")
+    user.setdefault("weekly_hours", 6)
+    user.setdefault("improvement_goal", "Crack interviews with confidence")
+    user.setdefault("hard_skills", {skill: 5 for skill in SKILL_AREAS["hard_skills"]})
+    user.setdefault("soft_skills", {skill: 5 for skill in SKILL_AREAS["soft_skills"]})
     sessions = st.session_state.sessions
     all_scores = [s for sess in sessions for s in sess["scores"]]
 
@@ -1039,6 +2115,7 @@ def page_profile():
             <p style='color:#a8b2d8;'><b style='color:#e94560;'>📞</b> {user.get("phone","—")}</p>
             <p style='color:#a8b2d8;'><b style='color:#e94560;'>🎓</b> {user.get("branch","—")} • Year {user.get("year","—")}</p>
             <p style='color:#a8b2d8;'><b style='color:#e94560;'>📊</b> CGPA: {user.get("cgpa","—")}</p>
+            <p style='color:#a8b2d8;'><b style='color:#e94560;'>Skill</b> Programming Knowledge: {user.get("coding_knowledge","Not specified")}</p>
             <p style='color:#a8b2d8;'><b style='color:#e94560;'>💡</b> {", ".join(user.get("interests",[])) or "Not specified"}</p>
         </div>
         """, unsafe_allow_html=True)
@@ -1077,6 +2154,103 @@ def page_profile():
                     st.markdown(f"**{s['avg']}/10**")
         else:
             st.info("Complete mock interviews to see your stats here!")
+
+    st.markdown("---")
+    st.markdown("#### Skill Assessment")
+    st.caption("Tell us about your hard skills, soft skills, and goals so the app can recommend how to improve.")
+
+    with st.form("skill_assessment_form"):
+        top1, top2, top3 = st.columns(3)
+        role_options = [
+            "Software Engineer",
+            "Backend Developer",
+            "Frontend Developer",
+            "Full Stack Developer",
+            "Data Analyst",
+            "Data Scientist",
+            "AI/ML Engineer",
+        ]
+        learning_options = ["Balanced", "Hands-on", "Theory First", "Fast-paced", "Slow and Deep"]
+
+        with top1:
+            target_role = st.selectbox(
+                "Target Role",
+                role_options,
+                index=role_options.index(user.get("target_role", "Software Engineer"))
+            )
+        with top2:
+            learning_style = st.selectbox(
+                "Learning Style",
+                learning_options,
+                index=learning_options.index(user.get("learning_style", "Balanced"))
+            )
+        with top3:
+            weekly_hours = st.slider("Hours Per Week", 1, 25, int(user.get("weekly_hours", 6)))
+
+        improvement_goal = st.text_input(
+            "Main Improvement Goal",
+            value=user.get("improvement_goal", "Crack interviews with confidence")
+        )
+
+        st.markdown("##### Hard Skills")
+        hard_cols = st.columns(2)
+        hard_inputs = {}
+        for idx, skill in enumerate(SKILL_AREAS["hard_skills"]):
+            with hard_cols[idx % 2]:
+                hard_inputs[skill] = st.slider(
+                    skill, 1, 10, int(user.get("hard_skills", {}).get(skill, 5)), key=f"hard_{skill}"
+                )
+
+        st.markdown("##### Soft Skills")
+        soft_cols = st.columns(2)
+        soft_inputs = {}
+        for idx, skill in enumerate(SKILL_AREAS["soft_skills"]):
+            with soft_cols[idx % 2]:
+                soft_inputs[skill] = st.slider(
+                    skill, 1, 10, int(user.get("soft_skills", {}).get(skill, 5)), key=f"soft_{skill}"
+                )
+
+        save_assessment = st.form_submit_button("Save Assessment", use_container_width=True)
+
+        if save_assessment:
+            user["target_role"] = target_role
+            user["learning_style"] = learning_style
+            user["weekly_hours"] = weekly_hours
+            user["improvement_goal"] = improvement_goal
+            user["hard_skills"] = hard_inputs
+            user["soft_skills"] = soft_inputs
+            st.session_state.user = user
+            st.success("Assessment updated. Your personalized guidance is ready below.")
+            st.rerun()
+
+    growth = build_growth_recommendations(st.session_state.user)
+
+    st.markdown("#### Personalized Guidance")
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown(
+            f"<div class='metric-card'><h2>{growth['hard_avg']}/10</h2><p>Hard Skills Average</p></div>",
+            unsafe_allow_html=True,
+        )
+    with g2:
+        st.markdown(
+            f"<div class='metric-card'><h2>{growth['soft_avg']}/10</h2><p>Soft Skills Average</p></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.info(growth["summary"])
+
+    st.markdown("##### What You Already Do Well")
+    for item in growth["strengths"]:
+        st.markdown(f"- {item}")
+
+    st.markdown("##### Recommendations")
+    for item in growth["recommendations"]:
+        st.markdown(f"- {item}")
+
+    st.markdown("##### Weekly Betterment Plan")
+    for item in growth["weekly_plan"]:
+        st.markdown(f"- {item}")
 
 # ─────────────────────────────────────────────
 # PAGE: CONTACT US
@@ -1153,8 +2327,14 @@ if page == "🏠 Home":
     page_home()
 elif page == "📝 Mock Interview":
     page_interview()
+elif page == "🧪 Hard Skill Test":
+    page_hard_skill_test()
+elif page == "🐞 Debug Coding Test":
+    page_debug_coding_test()
 elif page == "📚 Question Bank":
     page_question_bank()
+elif page == "🧩 Practice Problems":
+    page_practice_problems()
 elif page == "📊 Progress Tracker":
     page_progress()
 elif page == "🏆 Leaderboard":
